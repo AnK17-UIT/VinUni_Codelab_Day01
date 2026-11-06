@@ -362,6 +362,14 @@ def batch_compare(prompts: list[str]) -> list[dict]:
         key "prompt" containing the original prompt string.
     """
     # TODO: iterate over prompts, call compare_models, and inject the original "prompt".
+    batch_results = []
+    
+    for prompt in prompts:
+        result = compare_models(prompt)
+        result["prompt"] = prompt
+        batch_results.append(result)
+        
+    return batch_results
     raise NotImplementedError("Implement batch_compare")
 
 
@@ -380,6 +388,33 @@ def format_comparison_table(results: list[dict]) -> str:
         | Prompt | Model | Response (truncated) | Latency | Tokens (In/Out) | Cost (USD) |
     """
     # TODO: Build and return the formatted table string. Truncate response to 50 chars for clean display.
+    table_lines = []
+    table_lines.append("| Prompt | Model | Response (truncated) | Latency | Tokens (In/Out) | Cost (USD) |")
+    table_lines.append("|---|---|---|---|---|---|")
+    
+    for row in results:
+        # Xử lý chuỗi prompt: xóa dấu xuống dòng và cắt ngắn để bảng không bị vỡ
+        prompt_text = row.get("prompt", "").replace("\n", " ")
+        if len(prompt_text) > 30:
+            prompt_text = prompt_text[:27] + "..."
+            
+        for key, stats in row.items():
+            if key == "prompt":
+                continue
+                
+            model_name = key
+            
+            resp = str(stats.get("response", "")).replace("\n", " ")
+            if len(resp) > 50:
+                resp = resp[:47] + "..."
+                
+            lat = f"{stats.get('latency', 0.0):.2f}s"
+            tok = f"{stats.get('input_tokens', 0)}/{stats.get('output_tokens', 0)}"
+            cost = f"${stats.get('cost', 0.0):.6f}"
+            
+            table_lines.append(f"| {prompt_text} | {model_name} | {resp} | {lat} | {tok} | {cost} |")
+            
+    return "\n".join(table_lines)
     raise NotImplementedError("Implement format_comparison_table")
 
 
