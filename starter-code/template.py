@@ -67,6 +67,28 @@ def call_openai(
     """
     # TODO: Import OpenAI, instantiate client, call chat.completions.create with parameters,
     #       measure execution start/end time, extract text and token usage, and return them.
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key: 
+        api_key = "mock-key" 
+        
+    client = OpenAI(api_key=api_key) 
+    
+    start_time = time.time()
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=temperature,
+        top_p=top_p,
+        max_tokens=max_tokens
+    )
+    
+    latency = time.time() - start_time
+    response_text = response.choices[0].message.content
+    usage = {
+        "input_tokens": response.usage.prompt_tokens,
+        "output_tokens": response.usage.completion_tokens
+    }
+    return response_text, latency, usage
     raise NotImplementedError("Implement call_openai")
 
 
@@ -115,6 +137,48 @@ def call_gemini(
     """
     # TODO: Initialize Gemini client, set config parameters, call generate_content,
     #       measure latency, extract response text and usage metadata, and return the tuple.
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "mock-key" 
+    start_time = time.time() 
+    
+    try: 
+        # Option A: New Google GenAI SDK (preferred standard)
+        from google import genai 
+        from google.genai import types 
+        
+        client = genai.Client(api_key=api_key) 
+        config = types.GenerateContentConfig( 
+            temperature=temperature,
+            top_p=top_p,
+            max_output_tokens=max_tokens,
+        )
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=config
+        )
+        latency = time.time() - start_time
+        response_text = response.text
+        usage = {
+            "input_tokens": response.usage_metadata.prompt_token_count,
+            "output_tokens": response.usage_metadata.candidates_token_count
+        }
+        return response_text, latency, usage
+        
+    except ImportError:
+        # Fallback for Option B if Option A fails
+        import google.generativeai as genai_legacy
+        genai_legacy.configure(api_key=api_key)
+        model_inst = genai_legacy.GenerativeModel(model)
+        config = genai_legacy.types.GenerationConfig(
+            temperature=temperature, top_p=top_p, max_output_tokens=max_tokens
+        )
+        response = model_inst.generate_content(prompt, generation_config=config)
+        latency = time.time() - start_time
+        usage = {
+            "input_tokens": response.usage_metadata.prompt_token_count,
+            "output_tokens": response.usage_metadata.candidates_token_count
+        }
+        return response.text, latency, usage
     raise NotImplementedError("Implement call_gemini")
 
 
@@ -180,6 +244,23 @@ def compare_models(prompt: str) -> dict:
     # TODO: Calculate costs exactly based on input and output token counts using PRICING_1M_TOKENS
     #       Formula: Cost = (input_tokens * input_rate_per_1M + output_tokens * output_rate_per_1M) / 1,000,000
     # TODO: Assemble and return the comparison dictionary.
+    # 1. GPT-4o
+    text_4o, lat_4o, use_4o = call_openai(prompt, model=OPENAI_MODEL)
+    cost_4o = (use_4o["input_tokens"] * PRICING_1M_TOKENS[OPENAI_MODEL]["input"] + 
+               use_4o["output_tokens"] * PRICING_1M_TOKENS[OPENAI_MODEL]["output"]) / 1_000_000
+    results["gpt4o"] = {"response": text_4o, "latency": lat_4o, "cost": cost_4o, **use_4o}
+    
+    # 2. GPT-4o-mini
+    text_mini, lat_mini, use_mini = call_openai(prompt, model=OPENAI_MINI_MODEL)
+    cost_mini = (use_mini["input_tokens"] * PRICING_1M_TOKENS[OPENAI_MINI_MODEL]["input"] + 
+                 use_mini["output_tokens"] * PRICING_1M_TOKENS[OPENAI_MINI_MODEL]["output"]) / 1_000_000
+    results["gpt4o_mini"] = {"response": text_mini, "latency": lat_mini, "cost": cost_mini, **use_mini}
+    
+    # 3. Gemini 2.5 Flash
+    text_gemini, lat_gemini, use_gemini = call_gemini(prompt, model=GEMINI_MODEL)
+    cost_gemini = (use_gemini["input_tokens"] * PRICING_1M_TOKENS[GEMINI_MODEL]["input"] + 
+                   use_gemini["output_tokens"] * PRICING_1M_TOKENS[GEMINI_MODEL]["output"]) / 1_000_000
+    results["gemini_flash"] = {"response": text_gemini, "latency": lat_gemini, "cost": cost_gemini, **use_gemini}
     raise NotImplementedError("Implement compare_models")
 
 
@@ -201,6 +282,32 @@ def streaming_chatbot() -> None:
         - Keep history limited to the last 3 turns to optimize context window and costs.
     """
     # TODO: Setup interactive session, prompt user for input, stream response, and update history.
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") 
+    if not api_key: 
+        print("\033[93m[System Warning] GEMINI_API_KEY environment variable not set. Running in dummy mode.\033[0m") 
+        api_key = "mock-key" 
+        
+    print("\n\033[94m==============================================================") 
+    print("Vin Smart Future - Intelligent Chat Assistant") 
+    print("Powered by Google Gemini 2.5 Flash") 
+    print("Type 'quit' or 'exit' to end the session.") 
+    print("==============================================================\033[0m\n") 
+    
+    from google import genai
+    client = genai.Client(api_key=api_key)
+    chat = client.chats.create(model=GEMINI_MODEL)
+    
+    while True:
+        user_input = input("Bạn: ")
+        if user_input.lower() in ['quit', 'exit']:
+            print("Đã thoát Chatbot.")
+            break
+            
+        print("Bot: ", end="", flush=True)
+        response_stream = chat.send_message_stream(user_input)
+        for chunk in response_stream:
+            print(chunk.text, end="", flush=True)
+        print("\n")
     raise NotImplementedError("Implement streaming_chatbot")
 
 
@@ -228,6 +335,15 @@ def retry_with_backoff(
         The last exception raised by fn() after all retries are exhausted.
     """
     # TODO: implement retry loop with exponential backoff
+    last_exception = None 
+    for attempt in range(max_retries + 1): 
+        try: 
+            return fn() 
+        except Exception as e: 
+            last_exception = e 
+            time.sleep(base_delay * (2 ** attempt))
+            
+    raise last_exception
     raise NotImplementedError("Implement retry_with_backoff")
 
 
